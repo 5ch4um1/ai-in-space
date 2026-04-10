@@ -16,7 +16,7 @@ This application provides a REST API that fetches Sentinel-2 satellite imagery f
 ### Installation
 
 ```bash
-cd /home/duke/ai-in-space/sentinel2-node
+cd ~/sentinel2-node
 npm install
 ```
 

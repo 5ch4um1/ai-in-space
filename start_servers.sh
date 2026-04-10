@@ -3,7 +3,7 @@
 # Start both TiTiler and Node.js servers
 
 echo "Starting TiTiler server on port 8000..."
-cd /home/duke/ai-in-space/sentinel2-node
+cd ~/sentinel2-node
 source venv/bin/activate
 python titiler_server.py > /tmp/titiler.log 2>&1 &
 TITILER_PID=$!
