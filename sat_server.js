@@ -1,6 +1,28 @@
 const express = require('express');
 const sgp4 = require('sgp4');
+const fs = require('fs');
+const path = require('path');
 const { TLE_DATA } = require('./tle_data');
+
+const CACHE_DIR = path.join(__dirname, 'image_cache');
+const NO_IMAGE_FILE = path.join(__dirname, 'no_image_cache.json');
+
+if (!fs.existsSync(CACHE_DIR)) {
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+}
+
+function loadNoImageCache() {
+  try {
+    if (fs.existsSync(NO_IMAGE_FILE)) {
+      return JSON.parse(fs.readFileSync(NO_IMAGE_FILE, 'utf8'));
+    }
+  } catch (e) {}
+  return {};
+}
+
+function saveNoImageCache(data) {
+  fs.writeFileSync(NO_IMAGE_FILE, JSON.stringify(data, null, 2));
+}
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -162,8 +184,8 @@ app.get('/', (req, res) => {
       <span id="simTime">--</span>
     </div>
     <div class="control-group">
-      <label>Animation Speed (ms per step)</label>
-      <input type="number" id="animSpeed" value="50" min="1" max="50000" step="10">
+      <label>Animation Speed (ms per step, min 5000)</label>
+      <input type="number" id="animSpeed" value="5000" min="5000" max="60000" step="1000">
     </div>
     <div class="control-group">
       <label>Band Selection (for imagery)</label>
@@ -222,9 +244,8 @@ app.get('/', (req, res) => {
     let isPaused = false;
     let liveMode = false;
 
-    const imageCache = new Map();
+    let noImageCache = loadNoImageCache();
     const CACHE_PREFIX = 'sentinel2_cache_';
-    const NO_IMAGE_PREFIX = 'sentinel2_noimg_';
 
     const now = new Date();
     now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
@@ -272,7 +293,7 @@ app.get('/', (req, res) => {
         document.getElementById('simProgress').value = animIdx;
 
         animIdx++;
-        const speed = parseInt(document.getElementById('animSpeed').value) || 50;
+        const speed = Math.max(5000, parseInt(document.getElementById('animSpeed').value) || 5000);
         simInterval = setTimeout(animate, speed);
       }
       if (simInterval) clearTimeout(simInterval);
@@ -334,29 +355,43 @@ app.get('/', (req, res) => {
       return key;
     }
 
-    function saveToCache(key, blob) {
+    function getCachePath(key, bands) {
+      const safeKey = key.replace(/[^a-zA-Z0-9]/g, '_');
+      return path.join(CACHE_DIR, safeKey + '.png');
+    }
+
+    function getNoImagePath(key) {
+      return key;
+    }
+
+    function saveToCache(key, blob, bands) {
       return new Promise((resolve) => {
         const reader = new FileReader();
         reader.onloadend = () => {
-          localStorage.setItem(CACHE_PREFIX + key, reader.result);
+          const buffer = Buffer.from(reader.result.split(',')[1], 'base64');
+          const filepath = getCachePath(key, bands);
+          fs.writeFileSync(filepath, buffer);
           resolve();
         };
         reader.readAsDataURL(blob);
       });
     }
 
-    function loadFromCache(key) {
-      const data = localStorage.getItem(CACHE_PREFIX + key);
-      if (data) return data;
+    function loadFromCache(key, bands) {
+      const filepath = getCachePath(key, bands);
+      if (fs.existsSync(filepath)) {
+        return filepath;
+      }
       return null;
     }
 
     function markNoImage(key) {
-      localStorage.setItem(NO_IMAGE_PREFIX + key, '1');
+      noImageCache[key] = true;
+      saveNoImageCache(noImageCache);
     }
 
     function wasNoImage(key) {
-      return localStorage.getItem(NO_IMAGE_PREFIX + key) === '1';
+      return noImageCache[key] === true;
     }
 
     async function runLiveMode() {
@@ -386,7 +421,7 @@ app.get('/', (req, res) => {
             await new Promise(r => setTimeout(r, speed));
             animIdx++;
 } else {
-            const cached = loadFromCache(cacheKey);
+            const cached = loadFromCache(cacheKey, bands);
             if (cached) {
               imgEl.src = cached;
               statusEl.textContent = 'Cached image: ' + pos.timestamp.substring(11, 19);
@@ -411,7 +446,7 @@ app.get('/', (req, res) => {
                 
                 if (response.ok) {
                   const blob = await response.blob();
-                  await saveToCache(cacheKey, blob);
+                  await saveToCache(cacheKey, blob, bands);
                   const objectUrl = URL.createObjectURL(blob);
                   imgEl.src = objectUrl;
                   statusEl.textContent = 'Got image: ' + pos.timestamp;
@@ -444,7 +479,7 @@ app.get('/', (req, res) => {
         }
         
         if (liveMode && animIdx < simulationPositions.length) {
-          const speed = parseInt(document.getElementById('animSpeed').value) || 50;
+          const speed = Math.max(5000, parseInt(document.getElementById('animSpeed').value) || 5000);
           await new Promise(r => setTimeout(r, speed));
         }
       }

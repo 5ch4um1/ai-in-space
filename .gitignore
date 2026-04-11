@@ -13,6 +13,8 @@ __pycache__/
 madrid/
 test_images/
 images/
+image_cache/
+no_image_cache.json
 sentinel2.pl
 methane-detect.pl
 methane_overlay.py
