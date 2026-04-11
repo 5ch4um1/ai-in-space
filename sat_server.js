@@ -386,29 +386,25 @@ app.get('/', (req, res) => {
     });
 
     function getCacheKey(lon, lat, timestamp, bands, sizeKm) {
-      var key = lon.toFixed(4) + '_' + lat.toFixed(4) + '_' + timestamp + '_sz' + sizeKm + '_' + bands.join(',');
+      var key = lon.toFixed(4) + '_' + lat.toFixed(4) + '_' + timestamp + '_sz' + sizeKm + '_b' + bands.sort().join(',');
       return key;
     }
 
-    function getCacheFilename(key, bands) {
+    function getCacheFilename(key) {
       const safeKey = key.replace(/[^a-zA-Z0-9]/g, '_');
       return safeKey + '.png';
     }
 
-    function getNoImagePath(key) {
-      return key;
-    }
-
-    async function saveToCache(key, blob, bands) {
+    async function saveToCache(key, blob) {
       return new Promise((resolve) => {
         const reader = new FileReader();
         reader.onloadend = async () => {
           const image = reader.result;
-          const filename = getCacheFilename(key, bands);
+          const filename = getCacheFilename(key);
           await fetch('/api/cache', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key, image, bands })
+            body: JSON.stringify({ key, image })
           });
           resolve(filename);
         };
@@ -416,8 +412,8 @@ app.get('/', (req, res) => {
       });
     }
 
-    async function loadFromCache(key, bands) {
-      const filename = getCacheFilename(key, bands);
+    async function loadFromCache(key) {
+      const filename = getCacheFilename(key);
       try {
         const response = await fetch('/cache/' + filename);
         if (response.ok) {
@@ -462,52 +458,70 @@ document.getElementById('simProgress').value = animIdx;
           const sizeKm = document.getElementById('tileSize').value;
           const statusEl = document.getElementById('imageStatus');
           const imgEl = document.getElementById('satImage');
+          const cacheKey = getCacheKey(pos.lon, pos.lat, pos.timestamp, bands, sizeKm);
           
           document.getElementById('imagePanel').classList.add('visible');
           
-          // Always fetch fresh - no caching
-          statusEl.textContent = 'Fetching at ' + pos.timestamp + '...';
-          
-          const params = new URLSearchParams({
-            lon: pos.lon.toFixed(6),
-            lat: pos.lat.toFixed(6),
-            timestamp: pos.timestamp,
-            spectral_bands: bands.join(','),
-            size_km: sizeKm,
-            window_seconds: 864000
-          });
-          
-          try {
-            const url = 'http://localhost:8000/data/image/sentinel?' + params.toString();
-            const response = await fetch(url, { mode: 'cors' });
+          // Check cache first
+          const cached = await loadFromCache(cacheKey);
+          if (cached) {
+            imgEl.src = cached;
+            statusEl.textContent = 'Cached image: ' + pos.timestamp;
+            const speed = Math.max(5000, parseInt(document.getElementById('animSpeed').value) || 5000);
+            await new Promise(r => setTimeout(r, speed));
+            animIdx++;
+          } else if (await wasNoImage(cacheKey)) {
+            statusEl.textContent = 'No image (cached): ' + pos.timestamp;
+            const speed = Math.max(5000, parseInt(document.getElementById('animSpeed').value) || 5000);
+            await new Promise(r => setTimeout(r, speed));
+            animIdx++;
+          } else {
+            // Fetch fresh
+            statusEl.textContent = 'Fetching at ' + pos.timestamp + '...';
             
-            if (response.ok) {
-              const blob = await response.blob();
-              const objectUrl = URL.createObjectURL(blob);
-              imgEl.src = objectUrl;
-              statusEl.textContent = 'Got image: ' + pos.timestamp;
+            const params = new URLSearchParams({
+              lon: pos.lon.toFixed(6),
+              lat: pos.lat.toFixed(6),
+              timestamp: pos.timestamp,
+              spectral_bands: bands.join(','),
+              size_km: sizeKm,
+              window_seconds: 864000
+            });
+            
+            try {
+              const url = 'http://localhost:8000/data/image/sentinel?' + params.toString();
+              const response = await fetch(url, { mode: 'cors' });
               
-              const meta = response.headers.get('sentinel_metadata');
-              if (meta) {
-                try {
-                  const info = JSON.parse(meta);
-                  if (info.cloud_cover !== null) {
-                    statusEl.textContent += ' (Cloud: ' + info.cloud_cover + '%)';
-                  }
-                } catch(e) {}
+              if (response.ok) {
+                const blob = await response.blob();
+                await saveToCache(cacheKey, blob);
+                const objectUrl = URL.createObjectURL(blob);
+                imgEl.src = objectUrl;
+                statusEl.textContent = 'Got image: ' + pos.timestamp;
+                
+                const meta = response.headers.get('sentinel_metadata');
+                if (meta) {
+                  try {
+                    const info = JSON.parse(meta);
+                    if (info.cloud_cover !== null) {
+                      statusEl.textContent += ' (Cloud: ' + info.cloud_cover + '%)';
+                    }
+                  } catch(e) {}
+                }
+                const speed = Math.max(5000, parseInt(document.getElementById('animSpeed').value) || 5000);
+                await new Promise(r => setTimeout(r, speed));
+                animIdx++;
+              } else {
+                await markNoImage(cacheKey);
+                statusEl.textContent = 'No image available';
+                const speed = Math.max(5000, parseInt(document.getElementById('animSpeed').value) || 5000);
+                await new Promise(r => setTimeout(r, speed));
+                animIdx++;
               }
-              const speed = Math.max(5000, parseInt(document.getElementById('animSpeed').value) || 5000);
-              await new Promise(r => setTimeout(r, speed));
-              animIdx++;
-            } else {
-              statusEl.textContent = 'No image available';
-              const speed = Math.max(5000, parseInt(document.getElementById('animSpeed').value) || 5000);
-              await new Promise(r => setTimeout(r, speed));
+            } catch(e) {
+              statusEl.textContent = 'Error: ' + e.message;
               animIdx++;
             }
-          } catch(e) {
-            statusEl.textContent = 'Error: ' + e.message;
-            animIdx++;
           }
         } else {
           animIdx++;
