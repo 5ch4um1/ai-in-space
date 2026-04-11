@@ -385,8 +385,8 @@ app.get('/', (req, res) => {
       await runLiveMode();
     });
 
-    function getCacheKey(lon, lat, timestamp, bands) {
-      var key = lon.toFixed(4) + '_' + lat.toFixed(4) + '_' + timestamp + '_' + bands.join(',');
+    function getCacheKey(lon, lat, timestamp, bands, sizeKm) {
+      var key = lon.toFixed(4) + '_' + lat.toFixed(4) + '_' + timestamp + '_sz' + sizeKm + '_' + bands.join(',');
       return key;
     }
 
@@ -455,78 +455,62 @@ app.get('/', (req, res) => {
         document.getElementById('satInfo').textContent = 
           currentSatName + ' | Lon: ' + pos.lon.toFixed(4) + ' | Lat: ' + pos.lat.toFixed(4) + ' | Alt: ' + Math.round(pos.alt) + 'km';
         document.getElementById('simTime').textContent = pos.timestamp;
-        document.getElementById('simProgress').value = animIdx;
+document.getElementById('simProgress').value = animIdx;
         
         const bands = Array.from(document.querySelectorAll('.checks input:checked')).map(c => c.value);
         if (bands.length > 0 && bands.length <= 3) {
           const sizeKm = document.getElementById('tileSize').value;
           const statusEl = document.getElementById('imageStatus');
           const imgEl = document.getElementById('satImage');
-          const cacheKey = getCacheKey(pos.lon, pos.lat, pos.timestamp, bands);
           
           document.getElementById('imagePanel').classList.add('visible');
           
-          if (wasNoImage(cacheKey)) {
-            statusEl.textContent = 'No image (cached): ' + pos.timestamp.substring(11, 19);
-            const speed = parseInt(document.getElementById('animSpeed').value) || 500;
-            await new Promise(r => setTimeout(r, speed));
-            animIdx++;
-} else {
-            const cached = loadFromCache(cacheKey, bands);
-            if (cached) {
-              imgEl.src = cached;
-              statusEl.textContent = 'Cached image: ' + pos.timestamp.substring(11, 19);
-              const speed = parseInt(document.getElementById('animSpeed').value) || 500;
+          // Always fetch fresh - no caching
+          statusEl.textContent = 'Fetching at ' + pos.timestamp + '...';
+          
+          const params = new URLSearchParams({
+            lon: pos.lon.toFixed(6),
+            lat: pos.lat.toFixed(6),
+            timestamp: pos.timestamp,
+            spectral_bands: bands.join(','),
+            size_km: sizeKm,
+            window_seconds: 864000
+          });
+          
+          try {
+            const url = 'http://localhost:8000/data/image/sentinel?' + params.toString();
+            const response = await fetch(url, { mode: 'cors' });
+            
+            if (response.ok) {
+              const blob = await response.blob();
+              const objectUrl = URL.createObjectURL(blob);
+              imgEl.src = objectUrl;
+              statusEl.textContent = 'Got image: ' + pos.timestamp;
+              
+              const meta = response.headers.get('sentinel_metadata');
+              if (meta) {
+                try {
+                  const info = JSON.parse(meta);
+                  if (info.cloud_cover !== null) {
+                    statusEl.textContent += ' (Cloud: ' + info.cloud_cover + '%)';
+                  }
+                } catch(e) {}
+              }
+              const speed = Math.max(5000, parseInt(document.getElementById('animSpeed').value) || 5000);
               await new Promise(r => setTimeout(r, speed));
               animIdx++;
             } else {
-              statusEl.textContent = 'Fetching at ' + pos.timestamp.substring(11, 19) + '...';
-              
-              const params = new URLSearchParams({
-                lon: pos.lon.toFixed(6),
-                lat: pos.lat.toFixed(6),
-                timestamp: pos.timestamp,
-                spectral_bands: bands.join(','),
-                size_km: sizeKm,
-                window_seconds: 864000
-              });
-              
-              try {
-                const url = 'http://localhost:8000/data/image/sentinel?' + params.toString();
-                const response = await fetch(url, { mode: 'cors' });
-                
-                if (response.ok) {
-                  const blob = await response.blob();
-                  await saveToCache(cacheKey, blob, bands);
-                  const objectUrl = URL.createObjectURL(blob);
-                  imgEl.src = objectUrl;
-                  statusEl.textContent = 'Got image: ' + pos.timestamp;
-                  
-                  const meta = response.headers.get('sentinel_metadata');
-                  if (meta) {
-                    try {
-                      const info = JSON.parse(meta);
-                      if (info.cloud_cover !== null) {
-                        statusEl.textContent += ' (Cloud: ' + info.cloud_cover + '%)';
-                      }
-                    } catch(e) {}
-                  }
-                  const speed = parseInt(document.getElementById('animSpeed').value) || 500;
-                  await new Promise(r => setTimeout(r, speed));
-                  animIdx++;
-                } else {
-                  markNoImage(cacheKey);
-                  statusEl.textContent = 'No image available';
-                  const speed = parseInt(document.getElementById('animSpeed').value) || 500;
-                  await new Promise(r => setTimeout(r, speed));
-                  animIdx++;
-                }
-              } catch(e) {
-                statusEl.textContent = 'Error: ' + e.message;
-                animIdx++;
-              }
+              statusEl.textContent = 'No image available';
+              const speed = Math.max(5000, parseInt(document.getElementById('animSpeed').value) || 5000);
+              await new Promise(r => setTimeout(r, speed));
+              animIdx++;
             }
+          } catch(e) {
+            statusEl.textContent = 'Error: ' + e.message;
+            animIdx++;
           }
+        } else {
+          animIdx++;
         }
         
         if (liveMode && animIdx < simulationPositions.length) {
