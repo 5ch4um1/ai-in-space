@@ -445,6 +445,65 @@ Client Request
 - Cloud cover filtering is set to <100% by default (all images)
 - The `window_seconds` parameter controls how far back to search for images
 
+## Satellite Simulator
+
+The project includes a browser-based Sentinel-2 satellite simulator with real-time orbit visualization and image capture.
+
+### Starting the Simulator
+
+```bash
+# All servers (TiTiler + API + Simulator)
+./start_servers.sh
+
+# Or start just the simulator
+node sat_server.js
+```
+
+Then open **http://localhost:3001** in your browser.
+
+### Features
+
+- **Satellite Selection**: Choose Sentinel-2A or Sentinel-2B
+- **Orbit Simulation**: Visualize the satellite's actual path based on TLE data
+- **Live Mode**: Automatically move to each position and try to capture images
+- **Animation Controls**: Play/Pause/Stop with adjustable speed (1-50000ms per step)
+- **Band Selection**: Red, Green, Blue, NIR, NIR08, RedEdge1-3, SWIR16, SWIR22
+- **Tile Size**: Configurable area (1-100km)
+- **Image Caching**: 
+  - Caches downloaded images in localStorage
+  - Remembers positions with no image available (skips requests)
+- **Image Panel**:
+  - Resizable by dragging the handle
+  - Zoom controls (+, -, Reset) for image scaling
+  - Displays cloud cover percentage when available
+
+### API Endpoints
+
+```bash
+# Get available satellites
+curl http://localhost:3001/api/satellites
+
+# Get position at specific time
+curl "http://localhost:3001/api/position?sat=SENTINEL-2A&time=2026-04-11T12:00:00Z"
+
+# Get orbital path
+curl "http://localhost:3001/api/orbit?sat=SENTINEL-2A&start=2026-04-11T10:00:00Z&end=2026-04-11T12:00:00Z&step=30"
+```
+
+### Ports
+
+| Port | Service | Description |
+|------|---------|-------------|
+| 3000 | API Server | Main REST API (server.js) |
+| 3001 | Satellite Simulator | Browser UI (sat_server.js) |
+| 8000 | TiTiler | COG image server (Python) |
+
+### TLE Data
+
+The simulator uses real TLE (Two-Line Element) data from CelesTrak:
+- Sentinel-2A: NORAD catalog number 40697
+- Sentinel-2B: NORAD catalog number 42063
+
 ## License
 
 MIT

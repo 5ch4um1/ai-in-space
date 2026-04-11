@@ -5,3 +5,16 @@ __pycache__/
 .DS_Store
 .env
 *.log
+
+# Python cache
+.ruff_cache/
+
+# Generated imagery
+madrid/
+test_images/
+images/
+sentinel2.pl
+methane-detect.pl
+methane_overlay.py
+image.png
+madrid.png
