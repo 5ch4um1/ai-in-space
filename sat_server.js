@@ -11,21 +11,55 @@ if (!fs.existsSync(CACHE_DIR)) {
   fs.mkdirSync(CACHE_DIR, { recursive: true });
 }
 
-function loadNoImageCache() {
+const app = express();
+app.use(express.json({ limit: '50mb' }));
+const PORT = process.env.PORT || 3001;
+
+// Serve cached images
+app.get('/cache/:filename', (req, res) => {
+  const filepath = path.join(CACHE_DIR, req.params.filename);
+  if (fs.existsSync(filepath)) {
+    res.sendFile(filepath);
+  } else {
+    res.status(404).send('Not found');
+  }
+});
+
+// API to save image
+app.post('/api/cache', (req, res) => {
+  const { key, image, bands } = req.body;
+  const safeKey = key.replace(/[^a-zA-Z0-9]/g, '_');
+  const filename = safeKey + '.png';
+  const filepath = path.join(CACHE_DIR, filename);
+  const base64Data = image.replace(/^data:image\/png;base64,/, '');
+  fs.writeFileSync(filepath, Buffer.from(base64Data, 'base64'));
+  res.json({ success: true, filename });
+});
+
+// API to check no-image
+app.get('/api/noimage/:key', (req, res) => {
+  let noImageCache = {};
   try {
     if (fs.existsSync(NO_IMAGE_FILE)) {
-      return JSON.parse(fs.readFileSync(NO_IMAGE_FILE, 'utf8'));
+      noImageCache = JSON.parse(fs.readFileSync(NO_IMAGE_FILE, 'utf8'));
     }
   } catch (e) {}
-  return {};
-}
+  res.json({ exists: noImageCache[req.params.key] === true });
+});
 
-function saveNoImageCache(data) {
-  fs.writeFileSync(NO_IMAGE_FILE, JSON.stringify(data, null, 2));
-}
-
-const app = express();
-const PORT = process.env.PORT || 3001;
+// API to mark no-image
+app.post('/api/noimage', (req, res) => {
+  const { key } = req.body;
+  let noImageCache = {};
+  try {
+    if (fs.existsSync(NO_IMAGE_FILE)) {
+      noImageCache = JSON.parse(fs.readFileSync(NO_IMAGE_FILE, 'utf8'));
+    }
+  } catch (e) {}
+  noImageCache[key] = true;
+  fs.writeFileSync(NO_IMAGE_FILE, JSON.stringify(noImageCache, null, 2));
+  res.json({ success: true });
+});
 
 const wgs84 = sgp4.wgs84();
 let satellites = {};
@@ -244,8 +278,9 @@ app.get('/', (req, res) => {
     let isPaused = false;
     let liveMode = false;
 
-    let noImageCache = loadNoImageCache();
+    let noImageCache = {};
     const CACHE_PREFIX = 'sentinel2_cache_';
+    const NO_IMAGE_PREFIX = 'sentinel2_noimg_';
 
     const now = new Date();
     now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
@@ -351,47 +386,63 @@ app.get('/', (req, res) => {
     });
 
     function getCacheKey(lon, lat, timestamp, bands) {
-      var key = lon.toFixed(4) + '_' + lat.toFixed(4) + '_' + timestamp.substring(0,16) + '_' + bands.join(',');
+      var key = lon.toFixed(4) + '_' + lat.toFixed(4) + '_' + timestamp + '_' + bands.join(',');
       return key;
     }
 
-    function getCachePath(key, bands) {
+    function getCacheFilename(key, bands) {
       const safeKey = key.replace(/[^a-zA-Z0-9]/g, '_');
-      return path.join(CACHE_DIR, safeKey + '.png');
+      return safeKey + '.png';
     }
 
     function getNoImagePath(key) {
       return key;
     }
 
-    function saveToCache(key, blob, bands) {
+    async function saveToCache(key, blob, bands) {
       return new Promise((resolve) => {
         const reader = new FileReader();
-        reader.onloadend = () => {
-          const buffer = Buffer.from(reader.result.split(',')[1], 'base64');
-          const filepath = getCachePath(key, bands);
-          fs.writeFileSync(filepath, buffer);
-          resolve();
+        reader.onloadend = async () => {
+          const image = reader.result;
+          const filename = getCacheFilename(key, bands);
+          await fetch('/api/cache', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key, image, bands })
+          });
+          resolve(filename);
         };
         reader.readAsDataURL(blob);
       });
     }
 
-    function loadFromCache(key, bands) {
-      const filepath = getCachePath(key, bands);
-      if (fs.existsSync(filepath)) {
-        return filepath;
-      }
+    async function loadFromCache(key, bands) {
+      const filename = getCacheFilename(key, bands);
+      try {
+        const response = await fetch('/cache/' + filename);
+        if (response.ok) {
+          return '/cache/' + filename;
+        }
+      } catch (e) {}
       return null;
     }
 
-    function markNoImage(key) {
-      noImageCache[key] = true;
-      saveNoImageCache(noImageCache);
+    async function markNoImage(key) {
+      await fetch('/api/noimage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key })
+      });
     }
 
-    function wasNoImage(key) {
-      return noImageCache[key] === true;
+    async function wasNoImage(key) {
+      try {
+        const encodedKey = encodeURIComponent(key);
+        const response = await fetch('/api/noimage/' + encodedKey);
+        const data = await response.json();
+        return data.exists === true;
+      } catch (e) {}
+      return false;
     }
 
     async function runLiveMode() {
